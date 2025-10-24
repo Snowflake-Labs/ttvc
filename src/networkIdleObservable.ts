@@ -9,6 +9,29 @@ type ResourceLoadingElement =
   | HTMLImageElement
   | HTMLIFrameElement;
 
+// Not all link rels necessarilyresult in a resource download
+// so we keep a set of link rels that we ignore
+const linkRelIgnoreSet: Set<string> = new Set<string>([
+  'alternate',
+  'author',
+  'canonical',
+  'dns-prefetch',
+  'help',
+  'license',
+  'me',
+  'next',
+  'pingback',
+  'preconnect',
+  'prefetch',
+  'preload',
+  'prerender',
+  'preload',
+  'prev',
+  'privacy-policy',
+  'tag',
+  'terms-of-service',
+]);
+
 /**
  * Alerts subscribers to the presence or absence of pending AJAX requests
  *
@@ -106,10 +129,11 @@ class ResourceLoadingIdleObservable {
         mutation.addedNodes.forEach((node) => {
           if (
             node instanceof HTMLScriptElement ||
-            node instanceof HTMLLinkElement ||
             node instanceof HTMLImageElement ||
             node instanceof HTMLIFrameElement
           ) {
+            this.add(node);
+          } else if (node instanceof HTMLLinkElement && !linkRelIgnoreSet.has(node.rel)) {
             this.add(node);
           } else if (node.hasChildNodes() && node instanceof HTMLElement) {
             // images may be mounted within large subtrees, this is less
