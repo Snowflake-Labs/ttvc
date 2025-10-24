@@ -45,6 +45,10 @@ export class InViewportImageObserver {
 
   private handleLoadOrErrorEvent = (event: Event) => {
     if (event.target instanceof HTMLImageElement || event.target instanceof HTMLIFrameElement) {
+      // Ignore synthetic iframe loads created via srcdoc; these are handled via mutation observer
+      if (event.target instanceof HTMLIFrameElement && event.target.srcdoc) {
+        return;
+      }
       Logger.debug('InViewportImageObserver.handleLoadOrErrorEvent()', '::', 'event =', event);
       this.imageLoadTimes.set(event.target, event.timeStamp);
       this.intersectionObserver.observe(event.target);
