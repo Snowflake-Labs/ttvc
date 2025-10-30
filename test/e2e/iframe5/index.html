@@ -1,0 +1,31 @@
+<head>
+  <script src="/dist/index.min.js"></script>
+  <script src="/analytics.js"></script>
+</head>
+
+<body>
+  <h1 id="h1">Hello world!</h1>
+
+  <script>
+    const iframe = document.createElement('iframe');
+    // Use srcdoc with sandbox to simulate an inaccessible iframe
+    iframe.sandbox = '';
+    iframe.srcdoc = `
+      <!doctype html>
+      <html>
+        <body>
+          <div id="root">initial</div>
+          <script>
+            setTimeout(() => {
+              const el = document.getElementById('root');
+              el.textContent = 'updated';
+            }, 500);
+          <\/script>
+        </body>
+      </html>`;
+
+    window.addEventListener('load', () => document.body.appendChild(iframe));
+  </script>
+</body>
+
+

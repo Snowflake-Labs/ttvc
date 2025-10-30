@@ -1,13 +1,15 @@
 import {CONFIG} from './util/constants';
 import {Logger} from './util/logger';
+import {scheduleIframeRetry, getCrossRealmMutationObserver} from './util/iframe';
 
 export type Message = 'IDLE' | 'BUSY';
 type Subscriber = (message: Message) => void;
-type ResourceLoadingElement =
-  | HTMLScriptElement
-  | HTMLLinkElement
-  | HTMLImageElement
-  | HTMLIFrameElement;
+
+// Cross-realm helpers for iframe documents
+type CrossRealmImageLike = Element & {src?: string; complete?: boolean};
+type CrossRealmLinkLike = Element & {href?: string; rel?: string};
+type CrossRealmScriptLike = Element & {src?: string};
+type CrossRealmFrameLike = Element & {src?: string};
 
 // Not all link rels necessarilyresult in a resource download
 // so we keep a set of link rels that we ignore
@@ -116,29 +118,26 @@ class AjaxIdleObservable {
 
 /** Alerts subscribers to the presence or absence of pending resources */
 class ResourceLoadingIdleObservable {
-  private pendingResources = new Set<ResourceLoadingElement>();
+  private pendingResources = new Set<Element>();
   private subscribers = new Set<Subscriber>();
 
   public didNetworkTimeOut = false;
   private cleanupTimeout?: number; // time out if resource never resolves
+
+  // Track per-iframe cleanup handlers for inner resource observation
+  private iframeResourceCleanups = new Map<HTMLIFrameElement, () => void>();
 
   private registerResourceLoadListener = () => {
     // watch for added or updated script tags
     const o = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         mutation.addedNodes.forEach((node) => {
-          if (
-            node instanceof HTMLScriptElement ||
-            node instanceof HTMLImageElement ||
-            node instanceof HTMLIFrameElement
-          ) {
-            this.add(node);
-          } else if (node instanceof HTMLLinkElement && !linkRelIgnoreSet.has(node.rel)) {
-            this.add(node);
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            this.trackAddElement(node as Element);
           } else if (node.hasChildNodes() && node instanceof HTMLElement) {
             // images may be mounted within large subtrees, this is less
             // common with link/script elements
-            node.querySelectorAll('img').forEach(this.add);
+            node.querySelectorAll('img').forEach(this.trackAddElement);
           }
         });
       });
@@ -152,14 +151,8 @@ class ResourceLoadingIdleObservable {
       window.document.addEventListener(
         eventType,
         (event) => {
-          if (
-            event.target instanceof HTMLScriptElement ||
-            event.target instanceof HTMLLinkElement ||
-            event.target instanceof HTMLImageElement ||
-            event.target instanceof HTMLIFrameElement
-          ) {
-            this.remove(event.target);
-          }
+          const target = event.target as Element | null;
+          if (target && target.nodeType === Node.ELEMENT_NODE) this.trackRemoveElement(target);
         },
         {capture: true}
       );
@@ -176,6 +169,84 @@ class ResourceLoadingIdleObservable {
       }
     }
   }
+
+  /** Attach resource tracking inside an accessible iframe document */
+  observeIframeResources = (iframe: HTMLIFrameElement) => {
+    // cleanup any previous observation for this iframe
+    const prev = this.iframeResourceCleanups.get(iframe);
+    if (prev) {
+      prev();
+      this.iframeResourceCleanups.delete(iframe);
+    }
+
+    const tryAttach = () => {
+      try {
+        const doc = iframe.contentDocument;
+        if (!doc || !doc.documentElement) return false;
+
+        // Initial scan for existing resources
+        doc.querySelectorAll('img,link,script').forEach(this.trackAddElement);
+
+        // Observe mutations inside iframe (use cross-realm observer when available)
+        const ObserverCtor = getCrossRealmMutationObserver(iframe);
+        const mo = new ObserverCtor((mutations: MutationRecord[]) => {
+          mutations.forEach((mutation: MutationRecord) => {
+            mutation.addedNodes.forEach((node: Node) => {
+              const view = doc.defaultView as Window | null;
+              const isElementNode = node.nodeType === Node.ELEMENT_NODE;
+              const isSameRealmEl = !!(view && (node as unknown) instanceof (view as unknown as {HTMLElement: typeof HTMLElement}).HTMLElement);
+              if (isElementNode || isSameRealmEl) {
+                const el = node as Element;
+                this.trackAddElement(el);
+                // Also scan subtree for resources
+                if (typeof el.querySelectorAll === 'function') {
+                  el.querySelectorAll('img,link,script').forEach((n) =>
+                    this.trackAddElement(n)
+                  );
+                }
+              }
+            });
+          });
+        });
+        mo.observe(doc.documentElement, {childList: true, subtree: true});
+
+        // Load/error inside iframe
+        const onEvent = (event: Event) => {
+          const target = event.target as Element | null;
+          if (!target || !('tagName' in target)) return;
+          const tag = (target.tagName || '').toUpperCase();
+          if (['IMG', 'LINK', 'SCRIPT', 'IFRAME'].includes(tag)) {
+            this.trackRemoveElement(target);
+          }
+        };
+        doc.addEventListener('load', onEvent, true);
+        doc.addEventListener('error', onEvent, true);
+
+        // Reattach on iframe navigation (load)
+        const onFrameLoad = () => this.observeIframeResources(iframe);
+        iframe.addEventListener('load', onFrameLoad, {once: true});
+
+        // Save cleanup
+        this.iframeResourceCleanups.set(iframe, () => {
+          try { mo.disconnect(); } catch (e) { /* noop */ }
+          try {
+            doc.removeEventListener('load', onEvent, true);
+            doc.removeEventListener('error', onEvent, true);
+          } catch (e) { /* noop */ }
+          try { iframe.removeEventListener('load', onFrameLoad); } catch (e) { /* noop */ }
+        });
+
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    // Attempt immediately and also retry shortly if not yet ready
+    if (!tryAttach()) {
+      scheduleIframeRetry(iframe, this.iframeResourceCleanups, tryAttach);
+    }
+  };
 
   private next = (message: Message) => {
     Logger.debug('ResourceLoadingIdleObservable.next()', message);
@@ -209,28 +280,37 @@ class ResourceLoadingIdleObservable {
     this.cleanupTimeout = undefined;
   };
 
-  private add = (element: ResourceLoadingElement) => {
-    // ignore elements without resources to load
-    if (
-      (element instanceof HTMLImageElement && !element.src) ||
-      (element instanceof HTMLImageElement && element.complete) ||
-      (element instanceof HTMLLinkElement && !element.href) ||
-      (element instanceof HTMLScriptElement && !element.src) ||
-      (element instanceof HTMLIFrameElement && (!element.src || element.src === 'about:blank'))
-    ) {
-      return;
+  private shouldTrackElement = (el: Element): boolean => {
+    const tag = (el.tagName || '').toUpperCase();
+    if (tag === 'IMG') {
+      const img = el as CrossRealmImageLike;
+      return !!img.src && !img.complete;
     }
-
-    this.startCleanupTimeout();
-    if (this.pendingResources.size === 0) {
-      this.next('BUSY');
+    if (tag === 'LINK') {
+      const link = el as CrossRealmLinkLike;
+      return !!link.href && !linkRelIgnoreSet.has((link.rel || '').toLowerCase());
     }
-    this.pendingResources.add(element);
+    if (tag === 'SCRIPT') {
+      const script = el as CrossRealmScriptLike;
+      return !!script.src;
+    }
+    if (tag === 'IFRAME') {
+      const frame = el as CrossRealmFrameLike;
+      return !!frame.src && frame.src !== 'about:blank';
+    }
+    return false;
   };
 
-  private remove = (element: ResourceLoadingElement) => {
+  private trackAddElement = (el: Element) => {
+    if (!this.shouldTrackElement(el)) return;
+    this.startCleanupTimeout();
+    if (this.pendingResources.size === 0) this.next('BUSY');
+    this.pendingResources.add(el);
+  };
+
+  private trackRemoveElement = (el: Element) => {
     this.abortCleanupTimeout();
-    this.pendingResources.delete(element);
+    this.pendingResources.delete(el);
     if (this.pendingResources.size === 0) {
       this.next('IDLE');
     } else {
@@ -318,6 +398,10 @@ export class NetworkIdleObservable {
     this.ajaxIdleObservable.didNetworkTimeOut = false;
     this.resourceLoadingIdleObservable.didNetworkTimeOut = false;
   };
+
+  // Expose inner-iframe resource observation for same-origin frames
+  observeIframeResources = (iframe: HTMLIFrameElement) =>
+    this.resourceLoadingIdleObservable.observeIframeResources(iframe);
 
   subscribe = (subscriber: Subscriber) => {
     this.subscribers.add(subscriber);
