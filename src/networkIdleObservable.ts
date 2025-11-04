@@ -170,6 +170,46 @@ class ResourceLoadingIdleObservable {
     }
   }
 
+  // Choose the correct Performance object for a given element (parent or iframe realm)
+  private getPerformanceForElement = (el: Element): Performance => {
+    try {
+      const win = el.ownerDocument?.defaultView as (Window & {performance?: Performance}) | null;
+      return win?.performance || performance;
+    } catch {
+      return performance;
+    }
+  };
+
+  // Fast check if a resource element has already finished loading by the time we see it
+  private isResourceAlreadyLoaded = (el: Element): boolean => {
+    const tag = (el.tagName || '').toUpperCase();
+    try {
+      if (tag === 'IMG') {
+        const img = el as CrossRealmImageLike;
+        return !!img.complete;
+      }
+      if (tag === 'LINK') {
+        const link = el as CrossRealmLinkLike & {sheet?: StyleSheet | null};
+        if (link.sheet) return true;
+        if (link.href) {
+          const perfObj = this.getPerformanceForElement(el);
+          return perfObj.getEntriesByName(link.href).length > 0;
+        }
+      }
+      if (tag === 'SCRIPT') {
+        const script = el as CrossRealmScriptLike;
+        if (script.src) {
+          const perfObj = this.getPerformanceForElement(el);
+          Logger.debug('ResourceLoadingIdleObservable.isResourceAlreadyLoaded()', script.src, perfObj.getEntriesByName(script.src).length);
+          return perfObj.getEntriesByName(script.src).length > 0;
+        }
+      }
+    } catch {
+      // cross-origin or RT access failure: treat as not yet loaded
+    }
+    return false;
+  };
+
   /** Attach resource tracking inside an accessible iframe document */
   observeIframeResources = (iframe: HTMLIFrameElement) => {
     // cleanup any previous observation for this iframe
@@ -184,9 +224,6 @@ class ResourceLoadingIdleObservable {
         const doc = iframe.contentDocument;
         if (!doc || !doc.documentElement) return false;
 
-        // Initial scan for existing resources
-        doc.querySelectorAll('img,link,script').forEach(this.trackAddElement);
-
         // Observe mutations inside iframe (use cross-realm observer when available)
         const ObserverCtor = getCrossRealmMutationObserver(iframe);
         const mo = new ObserverCtor((mutations: MutationRecord[]) => {
@@ -200,9 +237,10 @@ class ResourceLoadingIdleObservable {
                 this.trackAddElement(el);
                 // Also scan subtree for resources
                 if (typeof el.querySelectorAll === 'function') {
-                  el.querySelectorAll('img,link,script').forEach((n) =>
-                    this.trackAddElement(n)
-                  );
+                  el.querySelectorAll('img,link,script').forEach((n) => {
+                    Logger.debug('ResourceLoadingIdleObservable.trackAddElement()', n);
+                    this.trackAddElement(n);
+                  });
                 }
               }
             });
@@ -221,6 +259,9 @@ class ResourceLoadingIdleObservable {
         };
         doc.addEventListener('load', onEvent, true);
         doc.addEventListener('error', onEvent, true);
+
+        // Initial scan for existing resources (after listeners attached)
+        doc.querySelectorAll('img,link,script').forEach(this.trackAddElement);
 
         // Reattach on iframe navigation (load)
         const onFrameLoad = () => this.observeIframeResources(iframe);
@@ -303,6 +344,8 @@ class ResourceLoadingIdleObservable {
 
   private trackAddElement = (el: Element) => {
     if (!this.shouldTrackElement(el)) return;
+    // Skip resources that have already completed by the time we see them
+    if (this.isResourceAlreadyLoaded(el)) return;
     this.startCleanupTimeout();
     if (this.pendingResources.size === 0) this.next('BUSY');
     this.pendingResources.add(el);
