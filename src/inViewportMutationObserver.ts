@@ -1,9 +1,39 @@
+import {CONFIG} from './util/constants';
 import {Logger} from './util/logger';
 import {getNetworkIdleObservable} from './networkIdleObservable';
 import {getCrossRealmMutationObserver, scheduleIframeRetry} from './util/iframe';
 
 export type InViewportMutationObserverCallback = (mutation: TimestampedMutationRecord) => void;
 export type TimestampedMutationRecord = MutationRecord & {timestamp?: number};
+
+/**
+ * Apply the host application's isValidDomMutation predicate, if one was
+ * configured.
+ *
+ * Only an explicit `false` rejects a mutation. A predicate that throws — or
+ * that returns nothing on some code path — must not break measurement or the
+ * host page, so those cases are treated as valid.
+ */
+const isValidDomMutation = (
+  mutation: TimestampedMutationRecord,
+  entry: IntersectionObserverEntry
+) => {
+  const predicate = CONFIG.IS_VALID_DOM_MUTATION;
+  if (!predicate) return true;
+
+  try {
+    return predicate(mutation, entry) !== false;
+  } catch (error) {
+    Logger.warn(
+      'InViewportMutationObserver',
+      '::',
+      'isValidDomMutation threw; accepting mutation',
+      '::',
+      error
+    );
+    return true;
+  }
+};
 
 /**
  * Instantiate this class to monitor mutation events that occur *within the
@@ -163,7 +193,7 @@ export class InViewportMutationObserver {
     );
     entries.forEach((entry) => {
       const mutation = this.mutations.get(entry.target);
-      if (entry.isIntersecting && mutation != null) {
+      if (entry.isIntersecting && mutation != null && isValidDomMutation(mutation, entry)) {
         Logger.info('InViewportMutationObserver.callback()', '::', 'mutation =', mutation);
         this.callback(mutation);
       }

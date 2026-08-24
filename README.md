@@ -298,8 +298,33 @@ export type TtvcOptions = {
   // a duration in ms to wait before assuming that a single network request
   // was not instrumented correctly
   networkTimeout?: number;
+
+  // decide whether a DOM mutation should count towards visual completeness;
+  // return false to exclude it (see below)
+  isValidDomMutation?: (mutation: MutationRecord, entry: IntersectionObserverEntry) => boolean;
 };
 ```
+
+`isValidDomMutation` is called once per in-viewport mutation, after the affected element's
+intersection has been measured and immediately before the mutation would update the TTVC
+measurement. Return `false` to exclude it. Both the `MutationRecord` and the
+`IntersectionObserverEntry` are provided, so rules may depend on layout information such as
+`entry.boundingClientRect`:
+
+```typescript
+init({
+  isValidDomMutation: (mutation, entry) => {
+    // ignore elements that occupy no space
+    const {width, height} = entry.boundingClientRect;
+    if (width === 0 || height === 0) return false;
+
+    return true;
+  },
+});
+```
+
+Note that mutations which are already excluded from the TTVC calculation — for example changes
+to elements outside the viewport — never reach this callback.
 
 ### Functions
 
