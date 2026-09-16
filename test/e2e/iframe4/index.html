@@ -1,0 +1,41 @@
+<head>
+  <script src="/dist/index.min.js"></script>
+  <script src="/analytics.js"></script>
+</head>
+
+<body>
+  <h1 id="h1">Hello world!</h1>
+
+  <script>
+    const iframe = document.createElement('iframe');
+    // Use srcdoc to create a same-origin iframe that mutates after load
+    iframe.style.width = '200px';
+    iframe.style.height = '100px';
+    iframe.srcdoc = `
+      <!doctype html>
+      <html>
+        <head>
+          <style>body { margin: 0; }</style>
+        </head>
+        <body>
+          <div id="root">initial</div>
+          <script>
+            parent.TTVC.incrementAjaxCount();
+            setTimeout(() => {
+              const el = document.getElementById('root');
+              const child = document.createElement('div');
+              child.textContent = 'appended';
+              el.appendChild(child);
+              parent.TTVC.decrementAjaxCount();
+            }, 500);
+          <\/script>
+        </body>
+      </html>`;
+
+    window.addEventListener('load', () => {
+      document.body.appendChild(iframe);
+    });
+  </script>
+</body>
+
+
