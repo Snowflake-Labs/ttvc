@@ -462,6 +462,8 @@ You can launch tests in the browser by opening http://localhost:3000/test/[test-
 
 ### Releasing
 
+> NOTE: This section covers publishing `@dropbox/ttvc` to the public npm registry. For the internal process of shipping fixes to Snowsight (branching, upstream syncs, and the `snow-release` → `snapps` pnpm-patch pipeline), see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
 > NOTE: This package should be released by a repository administrator. New versions are expected to be pushed directly to `main`.
 
 This package is configured to publish new releases using [`np`](https://github.com/sindresorhus/np#readme).
