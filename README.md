@@ -298,6 +298,14 @@ export type TtvcOptions = {
   // a duration in ms to wait before assuming that a single network request
   // was not instrumented correctly
   networkTimeout?: number;
+
+  // consulted before an in-viewport mutation is accepted as the
+  // measurement's visible change; return false to keep the previously
+  // accepted mutation instead
+  isValidDomChange?: (
+    mutation: TimestampedMutationRecord,
+    entry: IntersectionObserverEntry
+  ) => boolean;
 };
 ```
 
