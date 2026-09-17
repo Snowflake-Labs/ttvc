@@ -7,9 +7,16 @@ import {Logger} from './util/logger';
  * Request a callback when the CPU and network have both been simultaneously
  * idle for IDLE_TIMEOUT.
  *
+ * `startingNetworkTimeoutCount` is the timeout count from when the
+ * measurement started — not from when this wait begins. The two can differ
+ * because we wait for `window.load` first.
+ *
  * NOTE: will only trigger once
  */
-export function requestAllIdleCallback(callback: (didNetworkTimeOut: boolean) => void) {
+export function requestAllIdleCallback(
+  callback: (didNetworkTimeOut: boolean) => void,
+  startingNetworkTimeoutCount: number
+) {
   const networkIdleObservable = getNetworkIdleObservable();
 
   // state
@@ -37,8 +44,8 @@ export function requestAllIdleCallback(callback: (didNetworkTimeOut: boolean) =>
   const handleAllIdle = () => {
     timeout = window.setTimeout(() => {
       // Did we have to clear a "hung" request from observable state?
-      const didNetworkTimeOut = networkIdleObservable.didNetworkTimeOut();
-      networkIdleObservable.resetDidNetworkTimeOut();
+      const didNetworkTimeOut =
+        networkIdleObservable.networkTimeoutCount() > startingNetworkTimeoutCount;
 
       Logger.info('requestAllIdleCallback: ALL IDLE');
       callback(didNetworkTimeOut);

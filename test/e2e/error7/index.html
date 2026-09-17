@@ -1,0 +1,27 @@
+<head>
+  <script>
+    // keep the stalled window short enough to test
+    window.NETWORK_TIMEOUT = 2000;
+  </script>
+  <script src="/dist/index.min.js"></script>
+  <script src="/analytics.js"></script>
+</head>
+
+<body>
+  <h1 id="h1">Hello world!</h1>
+
+  <script>
+    window.addEventListener('load', () => {
+      // a resource that never resolves within the measurement window
+      const script = document.createElement('script');
+      script.src = '/stub.js?delay=30000&stalled=1';
+      document.body.appendChild(script);
+
+      // the page stays interactive while the resource is stalled, so
+      // incidental visual changes keep moving the last visible change forward
+      setTimeout(() => {
+        document.getElementById('h1').textContent = 'a later visual change';
+      }, 1000);
+    });
+  </script>
+</body>

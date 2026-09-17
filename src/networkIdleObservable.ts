@@ -44,7 +44,7 @@ class AjaxIdleObservable {
   private pendingRequests = 0;
   private subscribers = new Set<Subscriber>();
 
-  public didNetworkTimeOut = false;
+  public timeoutCount = 0;
   private cleanupTimeout?: number; // time out if ajax request never resolves
 
   private next = (message: Message) => {
@@ -66,7 +66,7 @@ class AjaxIdleObservable {
         'pendingRequests =',
         this.pendingRequests
       );
-      this.didNetworkTimeOut = true;
+      this.timeoutCount += 1;
       this.pendingRequests = 0;
       this.next('IDLE');
     };
@@ -121,7 +121,7 @@ class ResourceLoadingIdleObservable {
   private pendingResources = new Set<Element>();
   private subscribers = new Set<Subscriber>();
 
-  public didNetworkTimeOut = false;
+  public timeoutCount = 0;
   private cleanupTimeout?: number; // time out if resource never resolves
 
   // Track per-iframe cleanup handlers for inner resource observation
@@ -308,7 +308,7 @@ class ResourceLoadingIdleObservable {
         'pendingResources =',
         this.pendingResources
       );
-      this.didNetworkTimeOut = true;
+      this.timeoutCount += 1;
       this.pendingResources = new Set();
       this.next('IDLE');
     };
@@ -430,16 +430,15 @@ export class NetworkIdleObservable {
     return this.ajaxIdle && this.scriptLoadingIdle;
   };
 
-  didNetworkTimeOut = () => {
-    return (
-      this.ajaxIdleObservable.didNetworkTimeOut ||
-      this.resourceLoadingIdleObservable.didNetworkTimeOut
-    );
-  };
-
-  resetDidNetworkTimeOut = () => {
-    this.ajaxIdleObservable.didNetworkTimeOut = false;
-    this.resourceLoadingIdleObservable.didNetworkTimeOut = false;
+  /**
+   * How many stalled requests we have given up on so far.
+   *
+   * Measurements overlap, so a timeout cannot be a flag that the first
+   * measurement to read it clears: compare this count against the one taken
+   * when a measurement started to learn whether it was affected.
+   */
+  networkTimeoutCount = () => {
+    return this.ajaxIdleObservable.timeoutCount + this.resourceLoadingIdleObservable.timeoutCount;
   };
 
   // Expose inner-iframe resource observation for same-origin frames
