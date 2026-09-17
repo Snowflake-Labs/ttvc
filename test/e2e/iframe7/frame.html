@@ -1,0 +1,14 @@
+<head>
+  <script>
+    // Emulate a long lived app: once the Resource Timing buffer is exhausted,
+    // entries are discarded and a script that has already loaded can no longer
+    // be recognized by performance.getEntriesByName().
+    performance.setResourceTimingBufferSize(0);
+  </script>
+</head>
+
+<body>
+  <div id="root">iframe content</div>
+  <script src="/stub.js?chunk=1"></script>
+  <script src="/stub.js?chunk=2"></script>
+</body>

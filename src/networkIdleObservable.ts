@@ -120,12 +120,21 @@ class AjaxIdleObservable {
 class ResourceLoadingIdleObservable {
   private pendingResources = new Set<Element>();
   private subscribers = new Set<Subscriber>();
+  // urls of resources we have seen resolve; Resource Timing entries are
+  // discarded once the buffer is full, so we cannot rely on them alone
+  private loadedResources = new Set<string>();
 
   public didNetworkTimeOut = false;
   private cleanupTimeout?: number; // time out if resource never resolves
 
-  // Track per-iframe cleanup handlers for inner resource observation
-  private iframeResourceCleanups = new Map<HTMLIFrameElement, () => void>();
+  // Track the document we observe for each iframe, so that observation is
+  // idempotent and existing resources are only scanned once per document
+  private iframeObservations = new WeakMap<
+    HTMLIFrameElement,
+    {doc: Document; cleanup: () => void}
+  >();
+  // Track pending retries for iframes whose document was not ready yet
+  private iframeRetryCleanups = new Map<HTMLIFrameElement, () => void>();
 
   private registerResourceLoadListener = () => {
     // watch for added or updated script tags
@@ -180,6 +189,24 @@ class ResourceLoadingIdleObservable {
     }
   };
 
+  // An image reports its own load state, so its url never has to be remembered
+  private reportsOwnCompletion = (el: Element) => (el.tagName || '').toUpperCase() === 'IMG';
+
+  // The url a resource element downloads, used to recognize resources we have already seen
+  private getResourceUrl = (el: Element): string | undefined => {
+    const tag = (el.tagName || '').toUpperCase();
+    if (tag === 'LINK') return (el as CrossRealmLinkLike).href || undefined;
+    if (tag === 'IMG' || tag === 'SCRIPT' || tag === 'IFRAME') {
+      return (el as CrossRealmImageLike).src || undefined;
+    }
+    return undefined;
+  };
+
+  private hasResourceTimingEntry = (el: Element, url?: string): boolean => {
+    if (!url) return false;
+    return this.getPerformanceForElement(el).getEntriesByName(url).length > 0;
+  };
+
   // Fast check if a resource element has already finished loading by the time we see it
   private isResourceAlreadyLoaded = (el: Element): boolean => {
     const tag = (el.tagName || '').toUpperCase();
@@ -191,18 +218,10 @@ class ResourceLoadingIdleObservable {
       if (tag === 'LINK') {
         const link = el as CrossRealmLinkLike & {sheet?: StyleSheet | null};
         if (link.sheet) return true;
-        if (link.href) {
-          const perfObj = this.getPerformanceForElement(el);
-          return perfObj.getEntriesByName(link.href).length > 0;
-        }
+        return this.hasResourceTimingEntry(el, link.href);
       }
       if (tag === 'SCRIPT') {
-        const script = el as CrossRealmScriptLike;
-        if (script.src) {
-          const perfObj = this.getPerformanceForElement(el);
-          Logger.debug('ResourceLoadingIdleObservable.isResourceAlreadyLoaded()', script.src, perfObj.getEntriesByName(script.src).length);
-          return perfObj.getEntriesByName(script.src).length > 0;
-        }
+        return this.hasResourceTimingEntry(el, (el as CrossRealmScriptLike).src);
       }
     } catch {
       // cross-origin or RT access failure: treat as not yet loaded
@@ -210,19 +229,27 @@ class ResourceLoadingIdleObservable {
     return false;
   };
 
-  /** Attach resource tracking inside an accessible iframe document */
+  /**
+   * Attach resource tracking inside an accessible iframe document
+   *
+   * Observation is persistent: a measurement that re-observes an iframe we are
+   * already watching must not detach and rescan it. Rescanning would re-queue
+   * resources whose load event has already passed, and those can never resolve.
+   */
   observeIframeResources = (iframe: HTMLIFrameElement) => {
-    // cleanup any previous observation for this iframe
-    const prev = this.iframeResourceCleanups.get(iframe);
-    if (prev) {
-      prev();
-      this.iframeResourceCleanups.delete(iframe);
-    }
-
     const tryAttach = () => {
       try {
         const doc = iframe.contentDocument;
         if (!doc || !doc.documentElement) return false;
+
+        const observation = this.iframeObservations.get(iframe);
+        // already observing this document
+        if (observation?.doc === doc) return true;
+        // the iframe navigated; drop the observation of the previous document
+        if (observation) {
+          observation.cleanup();
+          this.iframeObservations.delete(iframe);
+        }
 
         // Observe mutations inside iframe (use cross-realm observer when available)
         const ObserverCtor = getCrossRealmMutationObserver(iframe);
@@ -237,10 +264,7 @@ class ResourceLoadingIdleObservable {
                 this.trackAddElement(el);
                 // Also scan subtree for resources
                 if (typeof el.querySelectorAll === 'function') {
-                  el.querySelectorAll('img,link,script').forEach((n) => {
-                    Logger.debug('ResourceLoadingIdleObservable.trackAddElement()', n);
-                    this.trackAddElement(n);
-                  });
+                  el.querySelectorAll('img,link,script').forEach((n) => this.trackAddElement(n));
                 }
               }
             });
@@ -260,22 +284,23 @@ class ResourceLoadingIdleObservable {
         doc.addEventListener('load', onEvent, true);
         doc.addEventListener('error', onEvent, true);
 
-        // Initial scan for existing resources (after listeners attached)
-        doc.querySelectorAll('img,link,script').forEach(this.trackAddElement);
+        // Scan the resources that are already in this document. Everything
+        // added from here on is picked up incrementally by the observer above.
+        doc.querySelectorAll('img,link,script').forEach((n) => this.trackExistingElement(n));
 
-        // Reattach on iframe navigation (load)
+        // Reattach when the iframe navigates to another document
         const onFrameLoad = () => this.observeIframeResources(iframe);
-        iframe.addEventListener('load', onFrameLoad, {once: true});
+        iframe.addEventListener('load', onFrameLoad);
 
-        // Save cleanup
-        this.iframeResourceCleanups.set(iframe, () => {
+        const cleanup = () => {
           try { mo.disconnect(); } catch (e) { /* noop */ }
           try {
             doc.removeEventListener('load', onEvent, true);
             doc.removeEventListener('error', onEvent, true);
           } catch (e) { /* noop */ }
           try { iframe.removeEventListener('load', onFrameLoad); } catch (e) { /* noop */ }
-        });
+        };
+        this.iframeObservations.set(iframe, {doc, cleanup});
 
         return true;
       } catch {
@@ -285,7 +310,7 @@ class ResourceLoadingIdleObservable {
 
     // Attempt immediately and also retry shortly if not yet ready
     if (!tryAttach()) {
-      scheduleIframeRetry(iframe, this.iframeResourceCleanups, tryAttach);
+      scheduleIframeRetry(iframe, this.iframeRetryCleanups, tryAttach);
     }
   };
 
@@ -306,7 +331,7 @@ class ResourceLoadingIdleObservable {
         'Consider filing a bug report if this continues to occur.',
         '::',
         'pendingResources =',
-        this.pendingResources
+        [...this.pendingResources].map((el) => this.getResourceUrl(el) ?? el.tagName)
       );
       this.didNetworkTimeOut = true;
       this.pendingResources = new Set();
@@ -351,7 +376,27 @@ class ResourceLoadingIdleObservable {
     this.pendingResources.add(el);
   };
 
+  /**
+   * Track a resource that was already in the document when we attached to it.
+   *
+   * Such an element will not emit another load event, so anything we cannot
+   * prove to be pending has to be treated as loaded. Resource Timing is not
+   * proof on its own: entries are dropped once the buffer is full.
+   */
+  private trackExistingElement = (el: Element) => {
+    if (!this.reportsOwnCompletion(el)) {
+      const url = this.getResourceUrl(el);
+      if (url && this.loadedResources.has(url)) return;
+      if (el.ownerDocument?.readyState === 'complete') return;
+    }
+    this.trackAddElement(el);
+  };
+
   private trackRemoveElement = (el: Element) => {
+    if (!this.reportsOwnCompletion(el)) {
+      const url = this.getResourceUrl(el);
+      if (url) this.loadedResources.add(url);
+    }
     this.abortCleanupTimeout();
     this.pendingResources.delete(el);
     if (this.pendingResources.size === 0) {
