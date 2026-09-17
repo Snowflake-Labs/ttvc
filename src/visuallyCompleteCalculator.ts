@@ -246,8 +246,11 @@ class VisuallyCompleteCalculator {
     window.addEventListener('visibilitychange', cancelOnVisibilityChange);
     // attach user interaction listeners next tick (we don't want to pick up the SPA navigation click)
     window.setTimeout(() => {
-      window.addEventListener('click', cancelOnInteraction);
-      window.addEventListener('keydown', cancelOnInteraction);
+      // register in the capture phase: a target between window and the click
+      // can call stopPropagation() and prevent this listener from ever
+      // running if it were registered in the bubble phase instead
+      window.addEventListener('click', cancelOnInteraction, true);
+      window.addEventListener('keydown', cancelOnInteraction, true);
     }, 0);
 
     // wait for page to be definitely DONE
@@ -289,8 +292,8 @@ class VisuallyCompleteCalculator {
     // cleanup
     window.removeEventListener('pagehide', cancelOnNavigation);
     window.removeEventListener('visibilitychange', cancelOnVisibilityChange);
-    window.removeEventListener('click', cancelOnInteraction);
-    window.removeEventListener('keydown', cancelOnInteraction);
+    window.removeEventListener('click', cancelOnInteraction, true);
+    window.removeEventListener('keydown', cancelOnInteraction, true);
     // only disconnect observers if this is the most recent navigation
     if (navigationIndex === this.navigationCount) {
       this.inViewportImageObserver.disconnect();
