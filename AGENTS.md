@@ -49,7 +49,7 @@ yarn test:unit
 yarn test:e2e        # playwright
 ```
 
-Run lint + typecheck + unit at minimum before considering iframe/network-idle-observer changes (`src/networkIdleObservable.ts`, `src/inViewportMutationObserver.ts`, `src/util/iframe.ts`) done — this area has had several rounds of overlapping fixes and is easy to regress silently.
+Run lint + typecheck + unit at minimum before considering iframe/network-idle-observer changes (`src/networkIdleObservable.ts`, `src/inViewportMutationObserver.ts`) done — this area has had several rounds of overlapping fixes and is easy to regress silently.
 
 ## Release to Snowsight
 
