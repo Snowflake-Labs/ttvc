@@ -1,9 +1,32 @@
 import {Logger} from './util/logger';
 import {getNetworkIdleObservable} from './networkIdleObservable';
+import {CONFIG} from './util/constants';
 import {getCrossRealmMutationObserver, scheduleIframeRetry} from './util/iframe';
 
 export type InViewportMutationObserverCallback = (mutation: TimestampedMutationRecord) => void;
 export type TimestampedMutationRecord = MutationRecord & {timestamp?: number};
+
+const isValidDomChange = (
+  mutation: TimestampedMutationRecord,
+  entry: IntersectionObserverEntry
+): boolean => {
+  const predicate = CONFIG.IS_VALID_DOM_CHANGE;
+  if (!predicate) {
+    return true;
+  }
+  try {
+    return predicate(mutation, entry);
+  } catch (error) {
+    Logger.warn(
+      'InViewportMutationObserver',
+      '::',
+      'isValidDomChange predicate threw; accepting mutation',
+      '::',
+      error
+    );
+    return true;
+  }
+};
 
 /**
  * Instantiate this class to monitor mutation events that occur *within the
@@ -163,7 +186,7 @@ export class InViewportMutationObserver {
     );
     entries.forEach((entry) => {
       const mutation = this.mutations.get(entry.target);
-      if (entry.isIntersecting && mutation != null) {
+      if (entry.isIntersecting && mutation != null && isValidDomChange(mutation, entry)) {
         Logger.info('InViewportMutationObserver.callback()', '::', 'mutation =', mutation);
         this.callback(mutation);
       }
