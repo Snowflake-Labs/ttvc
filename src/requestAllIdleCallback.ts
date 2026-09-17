@@ -9,12 +9,17 @@ import {Logger} from './util/logger';
  *
  * NOTE: will only trigger once
  */
-export function requestAllIdleCallback(callback: (didNetworkTimeOut: boolean) => void) {
+export function requestAllIdleCallback(
+  callback: (didNetworkTimeOut: boolean) => void,
+  startingNetworkTimeoutCount?: number
+) {
   const networkIdleObservable = getNetworkIdleObservable();
 
   // state
   let networkIdle = networkIdleObservable.isIdle();
   let timeout: number | undefined = undefined;
+  const timeoutCountAtStart =
+    startingNetworkTimeoutCount ?? networkIdleObservable.networkTimeoutCount();
 
   const handleNetworkChange = (message: Message) => {
     networkIdle = message === 'IDLE';
@@ -37,8 +42,7 @@ export function requestAllIdleCallback(callback: (didNetworkTimeOut: boolean) =>
   const handleAllIdle = () => {
     timeout = window.setTimeout(() => {
       // Did we have to clear a "hung" request from observable state?
-      const didNetworkTimeOut = networkIdleObservable.didNetworkTimeOut();
-      networkIdleObservable.resetDidNetworkTimeOut();
+      const didNetworkTimeOut = networkIdleObservable.networkTimeoutCount() > timeoutCountAtStart;
 
       Logger.info('requestAllIdleCallback: ALL IDLE');
       callback(didNetworkTimeOut);

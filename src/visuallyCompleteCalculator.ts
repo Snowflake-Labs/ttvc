@@ -1,5 +1,6 @@
 import {InViewportMutationObserver, TimestampedMutationRecord} from './inViewportMutationObserver';
 import {waitForPageLoad} from './util';
+import {getNetworkIdleObservable} from './networkIdleObservable';
 import {requestAllIdleCallback} from './requestAllIdleCallback';
 import {InViewportImageObserver} from './inViewportImageObserver';
 import {Logger} from './util/logger';
@@ -185,6 +186,9 @@ class VisuallyCompleteCalculator {
     const navigationIndex = (this.navigationCount += 1);
     Logger.info('VisuallyCompleteCalculator.start()', '::', 'index =', navigationIndex);
 
+    // any request we give up on from here on stalled *this* measurement
+    const networkTimeoutCount = getNetworkIdleObservable().networkTimeoutCount();
+
     const previousMeasurement = this.observations.get(navigationIndex - 1);
     if (previousMeasurement && previousMeasurement.state === ObservationState.ACTIVE) {
       previousMeasurement.cancel(CancellationReason.NEW_MEASUREMENT);
@@ -257,7 +261,9 @@ class VisuallyCompleteCalculator {
     // - wait for window.on("load")
     await waitForPageLoad();
     // - wait for simultaneous network and CPU idle
-    const didNetworkTimeOut = await new Promise<boolean>(requestAllIdleCallback);
+    const didNetworkTimeOut = await new Promise<boolean>((resolve) =>
+      requestAllIdleCallback(resolve, networkTimeoutCount)
+    );
 
     // if current TTVC observation is still active (was not cancelled), record it
     if (observation.state === ObservationState.ACTIVE) {
