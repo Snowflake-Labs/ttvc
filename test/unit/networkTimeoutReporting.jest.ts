@@ -1,4 +1,5 @@
 import {decrementAjaxCount, incrementAjaxCount} from '../../src';
+import {getNetworkIdleObservable} from '../../src/networkIdleObservable';
 import {requestAllIdleCallback} from '../../src/requestAllIdleCallback';
 import {CONFIG} from '../../src/util/constants';
 import {FUDGE} from '../util/constants';
@@ -13,6 +14,8 @@ const wait = async (ms: number) => new Promise((resolve) => window.setTimeout(re
 describe('network timeout reporting', () => {
   const NETWORK_TIMEOUT = 100;
   const settle = () => wait(NETWORK_TIMEOUT + CONFIG.IDLE_TIMEOUT + FUDGE);
+  const waitForIdle = (callback: (didNetworkTimeOut: boolean) => void) =>
+    requestAllIdleCallback(callback, getNetworkIdleObservable().networkTimeoutCount());
 
   beforeEach(() => {
     CONFIG.NETWORK_TIMEOUT = NETWORK_TIMEOUT;
@@ -26,7 +29,7 @@ describe('network timeout reporting', () => {
     const callback = jest.fn();
 
     incrementAjaxCount();
-    requestAllIdleCallback(callback);
+    waitForIdle(callback);
     await settle();
 
     expect(callback).toHaveBeenCalledWith(true);
@@ -38,8 +41,8 @@ describe('network timeout reporting', () => {
 
     incrementAjaxCount();
     // a measurement that is replaced while the request is still pending
-    requestAllIdleCallback(restarted);
-    requestAllIdleCallback(current);
+    waitForIdle(restarted);
+    waitForIdle(current);
     await settle();
 
     expect(restarted).toHaveBeenCalledWith(true);
@@ -48,11 +51,11 @@ describe('network timeout reporting', () => {
 
   it('does not report a timeout to a measurement that started after it', async () => {
     incrementAjaxCount();
-    requestAllIdleCallback(jest.fn());
+    waitForIdle(jest.fn());
     await settle();
 
     const callback = jest.fn();
-    requestAllIdleCallback(callback);
+    waitForIdle(callback);
     await wait(CONFIG.IDLE_TIMEOUT + FUDGE);
 
     expect(callback).toHaveBeenCalledWith(false);
@@ -62,7 +65,7 @@ describe('network timeout reporting', () => {
     const callback = jest.fn();
 
     incrementAjaxCount();
-    requestAllIdleCallback(callback);
+    waitForIdle(callback);
     decrementAjaxCount();
     await wait(CONFIG.IDLE_TIMEOUT + FUDGE);
 

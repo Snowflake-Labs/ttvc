@@ -1,4 +1,5 @@
 import {decrementAjaxCount, incrementAjaxCount} from '../../src';
+import {getNetworkIdleObservable} from '../../src/networkIdleObservable';
 import {requestAllIdleCallback} from '../../src/requestAllIdleCallback';
 import {CONFIG} from '../../src/util/constants';
 import {FUDGE} from '../util/constants';
@@ -10,7 +11,7 @@ describe('requestAllIdleCallback', () => {
 
   beforeEach(() => {
     callback = jest.fn();
-    requestAllIdleCallback(callback);
+    requestAllIdleCallback(callback, getNetworkIdleObservable().networkTimeoutCount());
   });
 
   it('waits IDLE_TIMEOUT before resolving', async () => {
