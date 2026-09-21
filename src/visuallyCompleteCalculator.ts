@@ -1,6 +1,6 @@
 import {InViewportMutationObserver, TimestampedMutationRecord} from './inViewportMutationObserver';
 import {waitForPageLoad} from './util';
-import {getNetworkIdleObservable} from './networkIdleObservable';
+import {getNetworkIdleObservable, ResourceInfo} from './networkIdleObservable';
 import {requestAllIdleCallback} from './requestAllIdleCallback';
 import {InViewportImageObserver} from './inViewportImageObserver';
 import {Logger} from './util/logger';
@@ -34,6 +34,9 @@ export type Metric = {
     // the most recent visual update; this can be either a mutation or a load event target
     lastVisibleChange?: HTMLElement | TimestampedMutationRecord;
 
+    // the resource whose load/error released network idle for this measurement
+    lastResource?: ResourceInfo;
+
     navigationType: NavigationType;
   };
 };
@@ -62,6 +65,9 @@ export type CancellationError = {
 
   // the most recent visual update; this can be either a mutation or a load event target
   lastVisibleChange?: HTMLElement | TimestampedMutationRecord;
+
+  // the resource whose load/error released network idle before cancellation
+  lastResource?: ResourceInfo;
 
   navigationType: NavigationType;
 };
@@ -224,6 +230,7 @@ class VisuallyCompleteCalculator {
           cancellationReason,
           navigationType,
           lastVisibleChange: this.getLastVisibleChange(),
+          lastResource: getNetworkIdleObservable().getLastResource(),
           ...(e && {
             eventType: e.type,
             eventTarget: e.target || undefined,
@@ -282,6 +289,7 @@ class VisuallyCompleteCalculator {
             navigationType,
             didNetworkTimeOut,
             lastVisibleChange: this.getLastVisibleChange(),
+            lastResource: getNetworkIdleObservable().getLastResource(),
           },
         },
         observation

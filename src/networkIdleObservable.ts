@@ -9,6 +9,14 @@ type ResourceLoadingElement =
   | HTMLImageElement
   | HTMLIFrameElement;
 
+/** A description of a single resource that TTVC was waiting on. */
+export type ResourceInfo = {
+  url?: string;
+  tagName: string;
+  timestamp: number;
+  responseEnd?: number;
+};
+
 // Not all link rels necessarilyresult in a resource download
 // so we keep a set of link rels that we ignore
 const linkRelIgnoreSet: Set<string> = new Set<string>([
@@ -118,6 +126,7 @@ class AjaxIdleObservable {
 class ResourceLoadingIdleObservable {
   private pendingResources = new Set<ResourceLoadingElement>();
   private subscribers = new Set<Subscriber>();
+  public lastResource?: ResourceInfo;
 
   public timeoutCount = 0;
   private cleanupTimeout?: number; // time out if resource never resolves
@@ -209,6 +218,43 @@ class ResourceLoadingIdleObservable {
     this.cleanupTimeout = undefined;
   };
 
+  /** Describe a resource element for reporting purposes. */
+  private describeElement = (element: ResourceLoadingElement): ResourceInfo => {
+    let url: string | undefined;
+    if (element instanceof HTMLImageElement) {
+      url = element.currentSrc || element.src;
+    } else if (element instanceof HTMLLinkElement) {
+      url = element.href;
+    } else {
+      url = element.src;
+    }
+
+    return {
+      ...(url && {url}),
+      tagName: element.tagName.toUpperCase(),
+      timestamp: performance.now(),
+    };
+  };
+
+  /**
+   * Resolve the resource's true responseEnd from Resource Timing.
+   */
+  private withResponseEnd = (info: ResourceInfo): ResourceInfo => {
+    if (!info.url) return info;
+
+    try {
+      const entries = performance.getEntriesByName(info.url);
+      const entry = entries[entries.length - 1] as PerformanceResourceTiming | undefined;
+      if (!entry || typeof entry.responseEnd !== 'number' || entry.responseEnd <= 0) {
+        return info;
+      }
+
+      return {...info, responseEnd: entry.responseEnd};
+    } catch {
+      return info;
+    }
+  };
+
   private add = (element: ResourceLoadingElement) => {
     // ignore elements without resources to load
     if (
@@ -229,9 +275,17 @@ class ResourceLoadingIdleObservable {
   };
 
   private remove = (element: ResourceLoadingElement) => {
+    const wasPending = this.pendingResources.has(element);
+    if (wasPending) {
+      this.lastResource = this.describeElement(element);
+    }
+
     this.abortCleanupTimeout();
     this.pendingResources.delete(element);
     if (this.pendingResources.size === 0) {
+      if (wasPending && this.lastResource) {
+        this.lastResource = this.withResponseEnd(this.lastResource);
+      }
       this.next('IDLE');
     } else {
       this.startCleanupTimeout();
@@ -317,6 +371,12 @@ export class NetworkIdleObservable {
   networkTimeoutCount = () => {
     return this.ajaxIdleObservable.timeoutCount + this.resourceLoadingIdleObservable.timeoutCount;
   };
+
+  /**
+   * The resource whose load/error last emptied the pending set, i.e. the one that
+   * released network idle. Undefined until the first such resource resolves.
+   */
+  getLastResource = (): ResourceInfo | undefined => this.resourceLoadingIdleObservable.lastResource;
 
   subscribe = (subscriber: Subscriber) => {
     this.subscribers.add(subscriber);
