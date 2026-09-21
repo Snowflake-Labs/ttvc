@@ -15,6 +15,7 @@ export type {
   MetricSuccessSubscriber,
   MetricErrorSubscriber,
 } from './visuallyCompleteCalculator';
+export type {ResourceInfo} from './networkIdleObservable';
 
 let calculator: VisuallyCompleteCalculator;
 
